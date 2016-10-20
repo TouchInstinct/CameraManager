@@ -108,6 +108,7 @@ public class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGe
                     _updateCameraDevice(cameraDevice)
                     _setupMaxZoomScale()
                     _zoom(0)
+                    _setISO(AVCaptureISOCurrent, forDevice: _captureDeviceForCameraDevice(oldValue))
                 }
             }
         }
@@ -144,6 +145,7 @@ public class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGe
                 }
                 _setupMaxZoomScale()
                 _zoom(0)
+                _setISO(AVCaptureISOCurrent, forDevice: _captureDeviceForCameraDevice(cameraDevice))
             }
         }
     }
@@ -542,7 +544,55 @@ public class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGe
             print("Error locking configuration")
         }
     }
-    
+
+    private func attachISO(view: UIView) {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(CameraManager._panStart(_:)))
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+        pan.delegate = self
+    }
+
+    @objc
+    private func _panStart(recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .Changed || recognizer.state == .Ended else {
+            return
+        }
+
+        guard let view = embeddingView else { return }
+
+        let velocity = recognizer.velocityInView(view)
+
+        guard let device = _captureDeviceForCameraDevice(cameraDevice) where device.isExposureModeSupported(.Custom) else {
+            return
+        }
+
+        if velocity.y > 0 { // decrease
+            _setISO(max(device.activeFormat.minISO, device.ISO - 25), forDevice: device)
+        } else {  // increase
+            _setISO(min(device.activeFormat.maxISO, device.ISO + 25), forDevice: device)
+        }
+    }
+
+    private func _setISO(newISO: Float, forDevice captureDevice: AVCaptureDevice?) {
+        guard let device = captureDevice else {
+            return
+        }
+
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            return
+        }
+
+        if newISO == AVCaptureISOCurrent {
+            device.exposureMode = .ContinuousAutoExposure
+        } else {
+            device.setExposureModeCustomWithDuration(AVCaptureExposureDurationCurrent, ISO: newISO, completionHandler: nil)
+        }
+
+        device.unlockForConfiguration()
+    }
+
     // MARK: - CameraManager()
 
     private func _updateTorch(flashMode: CameraFlashMode) {
@@ -702,6 +752,7 @@ public class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGe
     private func _addPreviewLayerToView(view: UIView) {
         embeddingView = view
         attachZoom(view)
+        attachISO(view)
         dispatch_async(dispatch_get_main_queue(), { () -> Void in
             guard let _ = self.previewLayer else {
                 return
@@ -924,6 +975,15 @@ public class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGe
         } catch let outError {
             _show(NSLocalizedString("Device setup error occured", comment:""), message: "\(outError)")
             return nil
+        }
+    }
+
+    private func _captureDeviceForCameraDevice(device: CameraDevice) -> AVCaptureDevice? {
+        switch device {
+        case .Back:
+            return backCameraDevice
+        case .Front:
+            return frontCameraDevice
         }
     }
 
